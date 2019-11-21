@@ -17,57 +17,57 @@
 
 use std::borrow::Cow;
 
+/// An error that can occur when splitting a string.
+///
+/// An input string is erroneous if it ends while inside a quotation or right after an unescaped backslash.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum Error {
+    /// The input string ends with an unescaped backslash.
+    EndOfStringBackslash,
+    /// The input string has an unmatched `"`.
+    UnclosedDoubleQuote,
+    /// The input string has an unmatched `'`.
+    UnclosedSingleQuote
+}
+
 /// An iterator that takes an input string and splits it into the words using the same syntax as
 /// the POSIX shell.
 pub struct Shlex<I: Iterator<Item = u8>> {
     in_iter: I,
     /// The number of newlines read so far, plus one.
-    pub line_no: usize,
-    /// An input string is erroneous if it ends while inside a quotation or right after an
-    /// unescaped backslash.  Since Iterator does not have a mechanism to return an error, if that
-    /// happens, Shlex just throws out the last token, ends the iteration, and sets 'had_error' to
-    /// true; best to check it after you're done iterating.
-    pub had_error: bool,
+    pub line_no: usize
 }
 
 impl<'a> Shlex<std::str::Bytes<'a>> {
     pub fn new(in_str: &'a str) -> Self {
         Shlex {
             in_iter: in_str.bytes(),
-            line_no: 1,
-            had_error: false,
+            line_no: 1
         }
     }
 }
 
 impl<I: Iterator<Item = u8>> Shlex<I> {
-    fn parse_word(&mut self, mut ch: u8) -> Option<String> {
+    fn parse_word(&mut self, mut ch: u8) -> Result<String, Error> {
         let mut result: Vec<u8> = Vec::new();
         loop {
             match ch as char {
-                '"' => if let Err(()) = self.parse_double(&mut result) {
-                    self.had_error = true;
-                    return None;
-                },
-                '\'' => if let Err(()) = self.parse_single(&mut result) {
-                    self.had_error = true;
-                    return None;
-                },
+                '"' => { self.parse_double(&mut result)?; }
+                '\'' => { self.parse_single(&mut result)?; }
                 '\\' => if let Some(ch2) = self.next_char() {
                     if ch2 != '\n' as u8 { result.push(ch2); }
                 } else {
-                    self.had_error = true;
-                    return None;
+                    return Err(Error::EndOfStringBackslash);
                 },
                 ' ' | '\t' | '\n' => { break; },
                 _ => { result.push(ch as u8); },
             }
             if let Some(ch2) = self.next_char() { ch = ch2; } else { break; }
         }
-        unsafe { Some(String::from_utf8_unchecked(result)) }
+        Ok(unsafe { String::from_utf8_unchecked(result) })
     }
 
-    fn parse_double(&mut self, result: &mut Vec<u8>) -> Result<(), ()> {
+    fn parse_double(&mut self, result: &mut Vec<u8>) -> Result<(), Error> {
         loop {
             if let Some(ch2) = self.next_char() {
                 match ch2 as char {
@@ -82,19 +82,19 @@ impl<I: Iterator<Item = u8>> Shlex<I> {
                                 _ => { result.push('\\' as u8); result.push(ch3); }
                             }
                         } else {
-                            return Err(());
+                            return Err(Error::EndOfStringBackslash);
                         }
                     },
                     '"' => { return Ok(()); },
                     _ => { result.push(ch2); },
                 }
             } else {
-                return Err(());
+                return Err(Error::UnclosedDoubleQuote);
             }
         }
     }
 
-    fn parse_single(&mut self, result: &mut Vec<u8>) -> Result<(), ()> {
+    fn parse_single(&mut self, result: &mut Vec<u8>) -> Result<(), Error> {
         loop {
             if let Some(ch2) = self.next_char() {
                 match ch2 as char {
@@ -106,14 +106,14 @@ impl<I: Iterator<Item = u8>> Shlex<I> {
                                 _ => { result.push('\\' as u8); result.push(ch3); }
                             }
                         } else {
-                            return Err(());
+                            return Err(Error::EndOfStringBackslash);
                         }
                     },
                     '\'' => { return Ok(()); },
                     _ => { result.push(ch2); },
                 }
             } else {
-                return Err(());
+                return Err(Error::UnclosedSingleQuote);
             }
         }
     }
@@ -129,15 +129,15 @@ impl<I: Iterator<Item = u8>, T: IntoIterator<IntoIter = I, Item = u8>> From<T> f
     fn from(into_iter: T) -> Self {
         Shlex {
             in_iter: into_iter.into_iter(),
-            line_no: 1,
-            had_error: false
+            line_no: 1
         }
     }
 }
 
 impl<I: Iterator<Item = u8>> Iterator for Shlex<I> {
-    type Item = String;
-    fn next(&mut self) -> Option<String> {
+    type Item = Result<String, Error>;
+
+    fn next(&mut self) -> Option<Result<String, Error>> {
         if let Some(mut ch) = self.next_char() {
             // skip initial whitespace
             loop {
@@ -152,7 +152,7 @@ impl<I: Iterator<Item = u8>> Iterator for Shlex<I> {
                 }
                 if let Some(ch2) = self.next_char() { ch = ch2; } else { return None; }
             }
-            self.parse_word(ch)
+            Some(self.parse_word(ch))
         } else { // no initial character
             None
         }
@@ -160,12 +160,10 @@ impl<I: Iterator<Item = u8>> Iterator for Shlex<I> {
 
 }
 
-/// Convenience function that consumes the whole string at once.  Returns None if the input was
-/// erroneous.
-pub fn split(in_str: &str) -> Option<Vec<String>> {
+/// Convenience function that consumes the whole string at once.
+pub fn split(in_str: &str) -> Result<Vec<String>, Error> {
     let mut shl = Shlex::new(in_str);
-    let res = shl.by_ref().collect();
-    if shl.had_error { None } else { Some(res) }
+    shl.by_ref().collect()
 }
 
 /// Given a single word, return a string suitable to encode it as a shell argument.
@@ -203,25 +201,25 @@ pub fn join<'a, I: IntoIterator<Item = &'a str>>(words: I) -> String {
 }
 
 #[cfg(test)]
-static SPLIT_TEST_ITEMS: &'static [(&'static str, Option<&'static [&'static str]>)] = &[
-    ("foo$baz", Some(&["foo$baz"])),
-    ("foo baz", Some(&["foo", "baz"])),
-    ("foo\"bar\"baz", Some(&["foobarbaz"])),
-    ("foo \"bar\"baz", Some(&["foo", "barbaz"])),
-    ("   foo \nbar", Some(&["foo", "bar"])),
-    ("foo\\\nbar", Some(&["foobar"])),
-    ("\"foo\\\nbar\"", Some(&["foobar"])),
-    ("'baz\\$b'", Some(&["baz\\$b"])),
-    ("'baz\\\''", Some(&["baz\'"])),
-    ("\\", None),
-    ("\"\\", None),
-    ("'\\", None),
-    ("\"", None),
-    ("'", None),
-    ("foo #bar\nbaz", Some(&["foo", "baz"])),
-    ("foo #bar", Some(&["foo"])),
-    ("foo#bar", Some(&["foo#bar"])),
-    ("foo\"#bar", None),
+static SPLIT_TEST_ITEMS: &'static [(&'static str, Result<&'static [&'static str], Error>)] = &[
+    ("foo$baz", Ok(&["foo$baz"])),
+    ("foo baz", Ok(&["foo", "baz"])),
+    ("foo\"bar\"baz", Ok(&["foobarbaz"])),
+    ("foo \"bar\"baz", Ok(&["foo", "barbaz"])),
+    ("   foo \nbar", Ok(&["foo", "bar"])),
+    ("foo\\\nbar", Ok(&["foobar"])),
+    ("\"foo\\\nbar\"", Ok(&["foobar"])),
+    ("'baz\\$b'", Ok(&["baz\\$b"])),
+    ("'baz\\\''", Ok(&["baz\'"])),
+    ("\\", Err(Error::EndOfStringBackslash)),
+    ("\"\\", Err(Error::EndOfStringBackslash)),
+    ("'\\", Err(Error::EndOfStringBackslash)),
+    ("\"", Err(Error::UnclosedDoubleQuote)),
+    ("'", Err(Error::UnclosedSingleQuote)),
+    ("foo #bar\nbaz", Ok(&["foo", "baz"])),
+    ("foo #bar", Ok(&["foo"])),
+    ("foo#bar", Ok(&["foo#bar"])),
+    ("foo\"#bar", Err(Error::UnclosedDoubleQuote))
 ];
 
 #[test]
@@ -232,13 +230,14 @@ fn test_split() {
 }
 
 #[test]
-fn test_lineno() {
+fn test_lineno() -> Result<(), Error> {
     let mut sh = Shlex::new("\nfoo\nbar");
     while let Some(word) = sh.next() {
-        if word == "bar" {
+        if word? == "bar" {
             assert_eq!(sh.line_no, 3);
         }
     }
+    Ok(())
 }
 
 #[test]
