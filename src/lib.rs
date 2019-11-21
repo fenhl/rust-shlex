@@ -19,8 +19,8 @@ use std::borrow::Cow;
 
 /// An iterator that takes an input string and splits it into the words using the same syntax as
 /// the POSIX shell.
-pub struct Shlex<'a> {
-    in_iter: std::str::Bytes<'a>,
+pub struct Shlex<I: Iterator<Item = u8>> {
+    in_iter: I,
     /// The number of newlines read so far, plus one.
     pub line_no: usize,
     /// An input string is erroneous if it ends while inside a quotation or right after an
@@ -30,7 +30,7 @@ pub struct Shlex<'a> {
     pub had_error: bool,
 }
 
-impl<'a> Shlex<'a> {
+impl<'a> Shlex<std::str::Bytes<'a>> {
     pub fn new(in_str: &'a str) -> Self {
         Shlex {
             in_iter: in_str.bytes(),
@@ -38,7 +38,9 @@ impl<'a> Shlex<'a> {
             had_error: false,
         }
     }
+}
 
+impl<I: Iterator<Item = u8>> Shlex<I> {
     fn parse_word(&mut self, mut ch: u8) -> Option<String> {
         let mut result: Vec<u8> = Vec::new();
         loop {
@@ -123,7 +125,17 @@ impl<'a> Shlex<'a> {
     }
 }
 
-impl<'a> Iterator for Shlex<'a> {
+impl<I: Iterator<Item = u8>, T: IntoIterator<IntoIter = I, Item = u8>> From<T> for Shlex<I> {
+    fn from(into_iter: T) -> Self {
+        Shlex {
+            in_iter: into_iter.into_iter(),
+            line_no: 1,
+            had_error: false
+        }
+    }
+}
+
+impl<I: Iterator<Item = u8>> Iterator for Shlex<I> {
     type Item = String;
     fn next(&mut self) -> Option<String> {
         if let Some(mut ch) = self.next_char() {
