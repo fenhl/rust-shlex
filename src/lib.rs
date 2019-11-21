@@ -15,7 +15,10 @@
 //! The algorithms in this crate are oblivious to UTF-8 high bytes, so they iterate over the bytes
 //! directly as a micro-optimization.
 
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    fmt
+};
 
 /// An error that can occur when splitting a string.
 ///
@@ -28,6 +31,16 @@ pub enum Error {
     UnclosedDoubleQuote,
     /// The input string has an unmatched `'`.
     UnclosedSingleQuote
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Error::EndOfStringBackslash => write!(f, "input ends with a \\"),
+            Error::UnclosedDoubleQuote => write!(f, "input ends while inside a \" quotation"),
+            Error::UnclosedSingleQuote => write!(f, "input ends while inside a ' quotation")
+        }
+    }
 }
 
 /// An iterator that takes an input string and splits it into the words using the same syntax as
